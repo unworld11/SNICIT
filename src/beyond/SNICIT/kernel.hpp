@@ -100,17 +100,20 @@ __global__ void coarse_cluster(
 
 }
 
-_global_ void sparse_hidden_post(
+__global__ void sparse_hidden_post(
     const int *rowsY,
     const float* Y0,
-    const int* roffW,
-    const int* colsW,
-    const float* valsW,
+    const int* delta_index,
+    const float* nonzero_values,
+    const int* minimum,
+    const int* row_offset,
+    const int* avg_nnz,
+    const int* slope,
     const int M, const int N, const int K,
     float* Y1
 ) {
     // (8, 128)
-    extern  _shared_ float shRow[];
+    extern  __shared__ float shRow[];
     int tid = threadIdx.x + threadIdx.y*blockDim.x;
     int rid = rowsY[blockIdx.x];
     if (tid < K) {
@@ -119,24 +122,18 @@ _global_ void sparse_hidden_post(
     __syncthreads();
 
     for (int i = threadIdx.y; i < N; i += blockDim.y) {
-        float valY = Y0[rid * N + i];
+        float valY = Y0[rid * N + i];   //dense Y matrix
         if(valY == 0) {
             continue;
         }
-    if (threadIdx.x == 0 && threadIdx.y == 0 && blockIdx.x == 0) 
-    {
-      for (int i = 0; i < N; i++) 
-        {
-          printf("Y0[%d] = %f\n", i, Y0[i]);
-        }
-    }
 
-
-        int begOffW = roffW[i] + threadIdx.x;
-        int endOffW = roffW[i + 1];
-        for(int k = begOffW; k < endOffW; k += blockDim.x) { // += blockDim.x
-            int colW = colsW[k];
-            float valW = valsW[k];
+        int begOffW = row_offset[i];
+        int endOffW = begOffW + avg_nnz[i];
+        int min_col = minimum[i];
+        int slope_val = slope[i];
+        for(int k = begOffW + threadIdx.x; k < endOffW; k += blockDim.x) { // += blockDim.x
+            int colW = min_col + (k - begOffW) * slope_val + delta_index[k];
+            float valW = nonzero_values[k];
             atomicAdd(&shRow[colW], valY * valW);
         }
     }
@@ -144,14 +141,9 @@ _global_ void sparse_hidden_post(
     if (tid < K) {
         Y1[rid * K+tid] = shRow[tid];
     }
-    if (threadIdx.x == 0 && threadIdx.y == 0 && blockIdx.x == 0) 
-    {
-      for (int i = 0; i < N; i++) 
-        {
-          printf("Y1[%d] = %f\n", i, Y0[i]);
-        }
-    }
 }
+
+
 
 __global__ void update_post(
     const int *rowsY,
